@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Background -->
+  <rect x="0" y="0" width="512" height="512" rx="64" ry="64" fill="#0a0a0a"/>
+
+  <!-- Viewfinder bracket marks -->
+  <g stroke="#00ff41" stroke-width="24" stroke-linecap="square" fill="none">
+    <!-- Top-left -->
+    <line x1="56" y1="56" x2="56" y2="140"/>
+    <line x1="56" y1="56" x2="140" y2="56"/>
+    <!-- Top-right -->
+    <line x1="456" y1="56" x2="456" y2="140"/>
+    <line x1="456" y1="56" x2="372" y2="56"/>
+    <!-- Bottom-left -->
+    <line x1="56" y1="456" x2="56" y2="372"/>
+    <line x1="56" y1="456" x2="140" y2="456"/>
+    <!-- Bottom-right -->
+    <line x1="456" y1="456" x2="456" y2="372"/>
+    <line x1="456" y1="456" x2="372" y2="456"/>
+  </g>
+
+  <!-- ASCII face using project charset characters -->
+  <g fill="#00ff41" font-family="'Source Code Pro', 'Courier New', monospace" text-anchor="middle">
+    <!-- Eyes: @ @ -->
+    <text x="196" y="240" font-size="120" font-weight="bold">@</text>
+    <text x="316" y="240" font-size="120" font-weight="bold">@</text>
+    <!-- Mouth: :) using colon and parenthesis -->
+    <text x="232" y="370" font-size="110" font-weight="bold">:</text>
+    <text x="304" y="370" font-size="110" font-weight="bold">)</text>
+  </g>
+</svg>

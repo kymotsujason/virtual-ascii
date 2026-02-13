@@ -6,7 +6,7 @@ use nokhwa::utils::{CameraFormat, CameraIndex, FrameFormat, RequestedFormat, Req
 use nokhwa::Camera;
 
 pub fn requested_format(resolution: Option<(u32, u32)>, fps: u32) -> RequestedFormat<'static> {
-    // Default to 1920x1080 (16:9) — AbsoluteHighestFrameRate picks by pixel count
+    // Default to 1920x1080 (16:9). AbsoluteHighestFrameRate picks by pixel count
     // on tie, which selects 4:3 (e.g. 1920x1440) over 16:9 on many cameras.
     let (w, h) = resolution.unwrap_or((1920, 1080));
     let fmt_type = RequestedFormatType::Closest(CameraFormat::new(

@@ -48,7 +48,7 @@ pub struct MatrixRainState {
     is_movie_mode: bool,
 }
 
-/// Inline xorshift64 — fast, no dependencies
+/// Inline xorshift64, fast with no dependencies.
 fn xorshift64(state: &mut u64) -> u64 {
     let mut x = *state;
     x ^= x << 13;
@@ -343,7 +343,7 @@ impl MatrixRainState {
                         intensity: brightness,
                     });
                 } else if self.is_movie_mode {
-                    // Movie mode: dense background — random char, ambient floor + webcam
+                    // Movie mode: dense background, random char, ambient floor + webcam
                     let brightness = 0.06 + wb * 0.55;
 
                     let ch = if n > 0 {
@@ -433,7 +433,7 @@ mod tests {
     fn test_intensity_decay() {
         // Head (distance=0): (1.0 - 0)^2 = 1.0
         // Mid-trail (distance=half): (1.0 - 0.5)^2 = 0.25
-        // Trail end (distance=trail_length-1 ≈ 1.0): ~0.0
+        // Trail end (distance=trail_length-1 ~= 1.0): ~0.0
         let trail_len = 10.0_f32;
         let head_ri = (1.0 - 0.0 / trail_len).powi(2);
         let mid_ri = (1.0 - 5.0 / trail_len).powi(2);
@@ -513,7 +513,7 @@ mod tests {
             first_ghost
         );
 
-        // Last ghost row (ghost_t ≈ 1): intensity ≈ 0
+        // Last ghost row (ghost_t ~= 1): intensity ~= 0
         let ghost_t = (ghost_length - 1) as f32 / ghost_length as f32;
         let last_ghost = 0.18 * (1.0 - ghost_t) * (1.0 - ghost_t);
         assert!(

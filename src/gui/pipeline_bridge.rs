@@ -1,4 +1,5 @@
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crossbeam_channel::bounded;
 
@@ -55,8 +56,11 @@ impl VirtualAsciiApp {
         let (gui_raw_tx, gui_raw_rx) = bounded(1);
         let (gui_rendered_tx, gui_rendered_rx) = bounded(1);
 
-        // Reset shutdown flag
-        self.shutdown.store(false, Ordering::SeqCst);
+        // Create a fresh shutdown flag for this pipeline instance.
+        // This ensures old pipeline threads (still draining in a background wait()
+        // thread) cannot interfere with the new pipeline's shutdown flag.
+        let pipeline_shutdown = Arc::new(AtomicBool::new(false));
+        self.shutdown = pipeline_shutdown.clone();
 
         // Start pipeline
         let pipeline = Pipeline::start(
@@ -95,7 +99,9 @@ impl VirtualAsciiApp {
         self.gui_raw_rx = None;
         self.gui_rendered_rx = None;
 
-        // Wait for pipeline threads in background to avoid blocking GUI
+        // Wait for pipeline threads in background to avoid blocking GUI.
+        // Pipeline::wait() logs any thread panics with payload extraction,
+        // so panic detection is handled automatically.
         if let Some(pipeline) = self.pipeline.take() {
             std::thread::spawn(move || {
                 pipeline.wait();

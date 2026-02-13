@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -29,9 +29,12 @@ pub struct Pipeline {
     threads: Vec<thread::JoinHandle<()>>,
     out_w: u32,
     out_h: u32,
-    /// Channel for sending rendered frames to the output thread.
-    /// Stored here so we can spawn the output thread later via start_output().
-    output_rx: Option<Receiver<Vec<u8>>>,
+    /// Swappable sender: render thread sends frames through this indirection.
+    /// Some(tx) when output is active, None when stopped.
+    render_to_output_tx: Arc<Mutex<Option<Sender<Vec<u8>>>>>,
+    /// Handle and shutdown flag for the current output thread (if any).
+    output_handle: Option<thread::JoinHandle<()>>,
+    output_shutdown: Option<Arc<AtomicBool>>,
     shutdown: Arc<AtomicBool>,
 }
 
@@ -49,7 +52,11 @@ impl Pipeline {
         #[cfg(feature = "gui")] gui_rendered_tx: Option<Sender<PreviewFrame>>,
     ) -> anyhow::Result<Self> {
         let (capture_tx, capture_rx): (Sender<Frame>, Receiver<Frame>) = bounded(2);
-        let (render_tx, render_rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = bounded(2);
+
+        // Swappable output sender: render thread sends through this mutex.
+        // Allows start_output/stop_output to hot-swap the output channel.
+        let render_to_output_tx: Arc<Mutex<Option<Sender<Vec<u8>>>>> =
+            Arc::new(Mutex::new(None));
 
         let out_w = renderer.output_width;
         let out_h = renderer.output_height;
@@ -58,7 +65,7 @@ impl Pipeline {
         let shutdown_capture = shutdown.clone();
         let shutdown_render = shutdown.clone();
 
-        // Capture thread — creates Camera internally to avoid Send issues
+        // Capture thread. Creates Camera internally to avoid Send issues.
         let capture_handle = thread::Builder::new()
             .name("capture".into())
             .spawn(move || {
@@ -93,7 +100,7 @@ impl Pipeline {
                                 let old_index = cur_index;
                                 let old_res = cur_resolution;
 
-                                // Stop and drop old camera — sleep gives the UVC
+                                // Stop and drop old camera. Sleep gives the UVC
                                 // driver time to fully release the device
                                 camera.stop_stream();
                                 drop(camera);
@@ -152,8 +159,7 @@ impl Pipeline {
                                 }
                             }
                             CaptureAction::ChangeFps { fps } => {
-                                frame_interval = Duration::from_secs_f64(1.0 / fps as f64);
-                                // Reopen camera at new FPS
+                                // Don't update frame_interval yet - wait for camera success
                                 camera.stop_stream();
                                 drop(camera);
                                 thread::sleep(Duration::from_millis(200));
@@ -164,6 +170,7 @@ impl Pipeline {
                                         w = nw;
                                         h = nh;
                                         cur_fps = fps;
+                                        frame_interval = Duration::from_secs_f64(1.0 / fps as f64);
                                         eprintln!("  FPS changed: {} (camera reopened)", fps);
                                         let _ = cmd.response_tx.send(Ok(format!("fps={}", fps)));
                                     }
@@ -209,19 +216,40 @@ impl Pipeline {
                             match capture_tx.try_send(frame) {
                                 Ok(()) => {}
                                 Err(crossbeam_channel::TrySendError::Full(_)) => {}
-                                Err(crossbeam_channel::TrySendError::Disconnected(_)) => break,
+                                Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+                                    eprintln!("Capture: render channel disconnected, shutting down");
+                                    shutdown_capture.store(true, Ordering::SeqCst);
+                                    break;
+                                }
                             }
                             fps_counter.tick();
                         }
                         Err(e) => {
                             consecutive_errors += 1;
-                            if !shutdown_capture.load(Ordering::Relaxed) {
+                            // Only log the first error to avoid spam
+                            if consecutive_errors == 1 && !shutdown_capture.load(Ordering::Relaxed) {
                                 eprintln!("Capture error: {}", e);
                             }
                             if consecutive_errors >= 30 {
-                                eprintln!("Too many consecutive capture errors, shutting down");
-                                shutdown_capture.store(true, Ordering::SeqCst);
-                                break;
+                                eprintln!("Too many capture errors, attempting reconnect...");
+                                camera.stop_stream();
+                                drop(camera);
+                                match reconnect_camera(
+                                    cur_index,
+                                    cur_resolution,
+                                    cur_fps,
+                                    &shutdown_capture,
+                                ) {
+                                    Some((new_cam, nw, nh)) => {
+                                        camera = new_cam;
+                                        w = nw;
+                                        h = nh;
+                                        consecutive_errors = 0;
+                                        fps_counter = FpsCounter::new("Capture");
+                                        continue; // Capture immediately without rate-limit sleep
+                                    }
+                                    None => break, // Shutdown requested
+                                }
                             }
                         }
                     }
@@ -235,6 +263,7 @@ impl Pipeline {
             })?;
 
         // Render thread
+        let render_output_tx = render_to_output_tx.clone();
         let render_handle = thread::Builder::new()
             .name("render".into())
             .spawn(move || {
@@ -304,62 +333,85 @@ impl Pipeline {
                                 });
                             }
 
-                            match render_tx.try_send(rendered) {
-                                Ok(()) => {}
-                                Err(crossbeam_channel::TrySendError::Full(_)) => {}
-                                Err(crossbeam_channel::TrySendError::Disconnected(_)) => break,
+                            // Send to output thread via swappable sender.
+                            // Render thread NEVER breaks on output disconnect.
+                            // It keeps running for GUI preview; pipeline shutdown is via AtomicBool.
+                            {
+                                let guard = render_output_tx.lock().unwrap_or_else(|e| e.into_inner());
+                                if let Some(ref tx) = *guard {
+                                    let _ = tx.try_send(rendered);
+                                }
                             }
                             fps_counter.tick();
                         }
                         Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
-                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                            eprintln!("Render: capture channel disconnected, shutting down");
+                            shutdown_render.store(true, Ordering::SeqCst);
+                            break;
+                        }
                     }
                 }
             })?;
 
-        let mut threads = vec![capture_handle, render_handle];
+        let threads = vec![capture_handle, render_handle];
 
-        // Output thread — only spawn if v4l2_output is provided
-        let output_rx = if let Some(mut v4l2_output) = v4l2_output {
-            let shutdown_output = shutdown.clone();
-            let output_handle = thread::Builder::new()
+        // Output thread, only spawned if v4l2_output is provided at startup
+        let (output_handle, output_shutdown) = if let Some(mut v4l2_output) = v4l2_output {
+            let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = bounded(2);
+            // Store initial sender in the shared mutex
+            {
+                let mut guard = render_to_output_tx.lock().unwrap_or_else(|e| e.into_inner());
+                *guard = Some(tx);
+            }
+
+            let out_shutdown = Arc::new(AtomicBool::new(false));
+            let shutdown_output = out_shutdown.clone();
+            let pipeline_shutdown = shutdown.clone();
+            let handle = thread::Builder::new()
                 .name("output".into())
                 .spawn(move || {
                     let mut fps_counter = FpsCounter::new("Output");
                     let timeout = Duration::from_millis(100);
 
                     loop {
-                        if shutdown_output.load(Ordering::Relaxed) {
+                        if shutdown_output.load(Ordering::Relaxed)
+                            || pipeline_shutdown.load(Ordering::Relaxed)
+                        {
                             break;
                         }
 
-                        match render_rx.recv_timeout(timeout) {
+                        match rx.recv_timeout(timeout) {
                             Ok(rendered_frame) => {
                                 if let Err(e) = v4l2_output.write_frame(&rendered_frame) {
-                                    if !shutdown_output.load(Ordering::Relaxed) {
+                                    if !pipeline_shutdown.load(Ordering::Relaxed) {
                                         eprintln!("Output error: {}", e);
                                     }
-                                    shutdown_output.store(true, Ordering::SeqCst);
+                                    pipeline_shutdown.store(true, Ordering::SeqCst);
                                     break;
                                 }
                                 fps_counter.tick();
                             }
                             Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
-                            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+                            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                                // Sender was taken by stop_output(), clean exit
+                                break;
+                            }
                         }
                     }
                 })?;
-            threads.push(output_handle);
-            None // render_rx consumed by output thread
+            (Some(handle), Some(out_shutdown))
         } else {
-            Some(render_rx) // Keep for later start_output()
+            (None, None)
         };
 
         Ok(Pipeline {
             threads,
             out_w,
             out_h,
-            output_rx,
+            render_to_output_tx,
+            output_handle,
+            output_shutdown,
             shutdown: shutdown.clone(),
         })
     }
@@ -374,12 +426,24 @@ impl Pipeline {
 
     /// Start the v4l2 output thread on an already-running pipeline.
     pub fn start_output(&mut self, mut v4l2_output: V4l2Output) -> anyhow::Result<()> {
-        let render_rx = self
-            .output_rx
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("Output already running or no render channel"))?;
+        if self.output_handle.is_some() {
+            return Err(anyhow::anyhow!("Output already running"));
+        }
 
-        let shutdown_output = self.shutdown.clone();
+        // Create a new channel pair and store sender in the shared mutex.
+        // The render thread immediately starts feeding the new channel.
+        let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = bounded(2);
+        {
+            let mut guard = self
+                .render_to_output_tx
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            *guard = Some(tx);
+        }
+
+        let out_shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_output = out_shutdown.clone();
+        let pipeline_shutdown = self.shutdown.clone();
         let output_handle = thread::Builder::new()
             .name("output".into())
             .spawn(move || {
@@ -387,42 +451,116 @@ impl Pipeline {
                 let timeout = Duration::from_millis(100);
 
                 loop {
-                    if shutdown_output.load(Ordering::Relaxed) {
+                    if shutdown_output.load(Ordering::Relaxed)
+                        || pipeline_shutdown.load(Ordering::Relaxed)
+                    {
                         break;
                     }
 
-                    match render_rx.recv_timeout(timeout) {
+                    match rx.recv_timeout(timeout) {
                         Ok(rendered_frame) => {
                             if let Err(e) = v4l2_output.write_frame(&rendered_frame) {
-                                if !shutdown_output.load(Ordering::Relaxed) {
+                                if !pipeline_shutdown.load(Ordering::Relaxed) {
                                     eprintln!("Output error: {}", e);
                                 }
-                                shutdown_output.store(true, Ordering::SeqCst);
+                                pipeline_shutdown.store(true, Ordering::SeqCst);
                                 break;
                             }
                             fps_counter.tick();
                         }
                         Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
-                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                            // Sender was taken by stop_output(), clean exit
+                            break;
+                        }
                     }
                 }
             })?;
-        self.threads.push(output_handle);
+        self.output_handle = Some(output_handle);
+        self.output_shutdown = Some(out_shutdown);
         Ok(())
     }
 
-    /// Stop the v4l2 output thread (the capture+render pipeline continues).
-    /// Note: This signals shutdown to all threads. For a clean per-thread stop,
-    /// the output thread would need its own shutdown flag (future enhancement).
+    /// Stop the v4l2 output thread (capture+render pipeline continues).
     pub fn stop_output(&mut self) {
-        // Currently a no-op for the output thread — it will exit when the pipeline shuts down.
-        // A full implementation would need a separate shutdown flag per thread.
+        // Remove the sender, starving the output thread
+        {
+            let mut guard = self
+                .render_to_output_tx
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            *guard = None;
+        }
+
+        // Signal the output thread to stop
+        if let Some(ref flag) = self.output_shutdown {
+            flag.store(true, Ordering::SeqCst);
+        }
+
+        // Join the output thread (exits within ~100ms due to recv_timeout)
+        if let Some(handle) = self.output_handle.take() {
+            join_with_panic_log(handle);
+        }
+        self.output_shutdown = None;
     }
 
-    pub fn wait(self) {
-        for handle in self.threads {
-            let _ = handle.join();
+    pub fn wait(mut self) {
+        // Join output thread first if present
+        if let Some(handle) = self.output_handle.take() {
+            join_with_panic_log(handle);
         }
+        for handle in self.threads {
+            join_with_panic_log(handle);
+        }
+    }
+}
+
+/// Attempt to reconnect the camera indefinitely until success or shutdown.
+/// Retries every 2 seconds (split into 100ms sleeps for shutdown responsiveness).
+/// Returns None only if shutdown was requested.
+fn reconnect_camera(
+    camera_index: u32,
+    resolution: Option<(u32, u32)>,
+    fps: u32,
+    shutdown: &AtomicBool,
+) -> Option<(WebcamCapture, u32, u32)> {
+    loop {
+        if shutdown.load(Ordering::Relaxed) {
+            return None;
+        }
+        eprintln!("  Attempting camera reconnect (index {})...", camera_index);
+        match WebcamCapture::new(camera_index, resolution, fps) {
+            Ok(cam) => {
+                let (w, h) = cam.resolution();
+                eprintln!("  Camera reconnected: {}x{}", w, h);
+                return Some((cam, w, h));
+            }
+            Err(e) => {
+                eprintln!("  Reconnect failed: {}", e);
+                // Wait 2s before retrying, checking shutdown every 100ms
+                for _ in 0..20 {
+                    if shutdown.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+    }
+}
+
+/// Join a thread handle and log any panic payload.
+fn join_with_panic_log(handle: thread::JoinHandle<()>) {
+    let name = handle.thread().name().unwrap_or("unnamed").to_string();
+    if let Err(payload) = handle.join() {
+        let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic payload".to_string()
+        };
+        eprintln!("Thread '{}' panicked: {}", name, msg);
     }
 }
 

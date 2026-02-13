@@ -36,7 +36,7 @@ pub fn load_v4l2loopback(
             }
             Err(e) => Err(format!("pkexec failed: {}", e)),
         };
-        *result.lock().unwrap() = Some(res);
+        *result.lock().unwrap_or_else(|e| e.into_inner()) = Some(res);
     });
 }
 
@@ -55,6 +55,6 @@ pub fn unload_v4l2loopback(result: Arc<Mutex<Option<Result<String, String>>>>) {
             }
             Err(e) => Err(format!("pkexec failed: {}", e)),
         };
-        *result.lock().unwrap() = Some(res);
+        *result.lock().unwrap_or_else(|e| e.into_inner()) = Some(res);
     });
 }

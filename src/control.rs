@@ -1,5 +1,5 @@
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::io::FromRawFd;
+use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -175,6 +175,26 @@ pub fn start_listener(
             while !shutdown.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        // Reject connections from other UIDs (fail-closed)
+                        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+                        let mut len =
+                            std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+                        let ret = unsafe {
+                            libc::getsockopt(
+                                stream.as_raw_fd(),
+                                libc::SOL_SOCKET,
+                                libc::SO_PEERCRED,
+                                &mut cred as *mut _ as *mut libc::c_void,
+                                &mut len,
+                            )
+                        };
+                        if ret != 0
+                            || len != std::mem::size_of::<libc::ucred>() as libc::socklen_t
+                            || cred.uid != unsafe { libc::getuid() }
+                        {
+                            continue;
+                        }
+
                         // Set read timeout to prevent a misbehaving client from blocking forever
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
                         let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
@@ -204,23 +224,37 @@ pub fn start_listener(
 
 // --- Connection handler ---
 
+const MAX_LINE_LENGTH: usize = 4096;
+const MAX_COMMANDS_PER_CONNECTION: usize = 100;
+
 fn handle_connection(
     stream: UnixStream,
     state: &Arc<Mutex<RuntimeState>>,
     capture_cmd_tx: &Sender<CaptureCommand>,
     render_cmd_tx: &Sender<RenderCommand>,
 ) {
-    let reader = BufReader::new(&stream);
+    let mut reader = BufReader::new(&stream);
     let mut writer = &stream;
 
-    // Collect all lines from the connection
+    // Collect all lines with length and count limits
     let mut commands: Vec<String> = Vec::new();
-    for line in reader.lines() {
-        match line {
-            Ok(l) => {
-                let trimmed = l.trim().to_string();
+    let mut line_buf = String::new();
+    loop {
+        line_buf.clear();
+        match reader.read_line(&mut line_buf) {
+            Ok(0) => break, // EOF
+            Ok(n) if n > MAX_LINE_LENGTH => {
+                let _ = writer.write_all(b"ERR line too long\n");
+                return;
+            }
+            Ok(_) => {
+                let trimmed = line_buf.trim().to_string();
                 if !trimmed.is_empty() {
                     commands.push(trimmed);
+                }
+                if commands.len() >= MAX_COMMANDS_PER_CONNECTION {
+                    let _ = writer.write_all(b"ERR too many commands\n");
+                    return;
                 }
             }
             Err(_) => break,
@@ -233,7 +267,7 @@ fn handle_connection(
 
     // Check for STATUS command
     if commands.iter().any(|c| c.eq_ignore_ascii_case("STATUS")) {
-        let st = state.lock().unwrap();
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
         let status = st.format_status();
         let _ = writer.write_all(status.as_bytes());
         return;
@@ -260,7 +294,7 @@ fn handle_connection(
             }
         };
 
-        let current_max_fps = state.lock().unwrap().max_fps;
+        let current_max_fps = state.lock().unwrap_or_else(|e| e.into_inner()).max_fps;
 
         match key.as_str() {
             "camera_index" => match value.parse::<u32>() {
@@ -361,7 +395,7 @@ fn handle_connection(
 
     // Snapshot current state
     let snapshot = {
-        let st = state.lock().unwrap();
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
         StateSnapshot {
             camera_index: st.camera_index,
             resolution: st.resolution,
@@ -397,7 +431,7 @@ fn handle_connection(
                 match resp_rx.recv_timeout(Duration::from_secs(5)) {
                     Ok(Ok(msg)) => {
                         responses.push(format!("OK {}\n", msg));
-                        let mut st = state.lock().unwrap();
+                        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                         st.camera_index = cam_idx;
                         st.resolution = resolution;
                         // Refresh max_fps for the new camera/resolution
@@ -437,7 +471,7 @@ fn handle_connection(
                 match resp_rx.recv_timeout(Duration::from_secs(5)) {
                     Ok(Ok(msg)) => {
                         responses.push(format!("OK {}\n", msg));
-                        let mut st = state.lock().unwrap();
+                        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                         st.fps = new_fps;
                     }
                     Ok(Err(msg)) => responses.push(format!("ERR {}\n", msg)),
@@ -481,7 +515,7 @@ fn handle_connection(
             match resp_rx.recv_timeout(Duration::from_secs(5)) {
                 Ok(Ok(msg)) => {
                     responses.push(format!("OK {}\n", msg));
-                    let mut st = state.lock().unwrap();
+                    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                     st.theme_name = theme_name;
                     st.fg = fg;
                     st.bg = bg;

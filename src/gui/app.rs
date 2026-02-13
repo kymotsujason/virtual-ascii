@@ -94,7 +94,7 @@ impl VirtualAsciiApp {
 
     /// Check for v4l2 operation results from background threads
     fn check_v4l2_results(&mut self) {
-        let mut result = self.v4l2_op_result.lock().unwrap();
+        let mut result = self.v4l2_op_result.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(res) = result.take() {
             match res {
                 Ok(msg) => {

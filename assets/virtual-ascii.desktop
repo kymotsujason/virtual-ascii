@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Virtual ASCII
+Comment=Real-time webcam to ASCII art converter
+Exec=virtual-ascii gui
+Icon=virtual-ascii
+Categories=Graphics;Video;Utility;
+Terminal=false

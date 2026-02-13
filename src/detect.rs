@@ -31,18 +31,24 @@ struct V4l2FmtDesc {
     reserved: [u32; 3],
 }
 
+// Verify struct matches kernel layout (64 bytes)
+const _: () = assert!(std::mem::size_of::<V4l2FmtDesc>() == 64);
+
 /// V4L2 frame size enumerator for VIDIOC_ENUM_FRAMESIZES
 #[repr(C)]
 struct V4l2FrmSizeEnum {
     index: u32,
     pixel_format: u32,
     type_: u32,
-    // union — for discrete (type=1): width, height
+    // union, for discrete (type=1): width, height
     width: u32,
     height: u32,
-    _padding: [u8; 24],
+    _padding: [u8; 16],
     reserved: [u32; 2],
 }
+
+// Verify struct matches kernel layout (44 bytes)
+const _: () = assert!(std::mem::size_of::<V4l2FrmSizeEnum>() == 44);
 
 /// V4L2 frame interval enumerator for VIDIOC_ENUM_FRAMEINTERVALS
 #[repr(C)]
@@ -52,12 +58,15 @@ struct V4l2FrmIvalEnum {
     width: u32,
     height: u32,
     type_: u32,
-    // union — for discrete (type=1): numerator, denominator
+    // union, for discrete (type=1): numerator, denominator
     numerator: u32,
     denominator: u32,
     _padding: [u8; 16],
     reserved: [u32; 2],
 }
+
+// Verify struct matches kernel layout (52 bytes)
+const _: () = assert!(std::mem::size_of::<V4l2FrmIvalEnum>() == 52);
 
 // VIDIOC_ENUM_FMT = _IOWR('V', 2, struct v4l2_fmtdesc)
 nix::ioctl_readwrite!(vidioc_enum_fmt, b'V', 2, V4l2FmtDesc);
@@ -76,6 +85,9 @@ struct V4l2Capability {
     device_caps: u32,
     reserved: [u32; 3],
 }
+
+// Verify struct matches kernel layout (104 bytes)
+const _: () = assert!(std::mem::size_of::<V4l2Capability>() == 104);
 
 // VIDIOC_QUERYCAP = _IOR('V', 0, struct v4l2_capability)
 nix::ioctl_read!(vidioc_querycap, b'V', 0, V4l2Capability);

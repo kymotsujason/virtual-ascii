@@ -25,7 +25,7 @@ struct V4l2PixFormat {
     colorspace: u32,
     priv_: u32,
     flags: u32,
-    // unions for encoding/quantization — zero them out
+    // unions for encoding/quantization, zeroed out
     encoding: u32,
     quantization: u32,
     xfer_func: u32,
@@ -85,8 +85,12 @@ impl V4l2Output {
                 )
             })?;
 
-        let bytesperline = width * 3; // RGB24 = 3 bytes per pixel
-        let sizeimage = bytesperline * height;
+        let bytesperline = width
+            .checked_mul(3)
+            .ok_or_else(|| anyhow::anyhow!("Frame width overflow: {} * 3", width))?;
+        let sizeimage = bytesperline
+            .checked_mul(height)
+            .ok_or_else(|| anyhow::anyhow!("Frame size overflow: {} * {}", bytesperline, height))?;
 
         // Set the output format via VIDIOC_S_FMT
         let mut fmt = V4l2Format {

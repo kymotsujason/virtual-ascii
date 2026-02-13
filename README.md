@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon.svg" width="128" height="128" alt="Virtual ASCII icon">
+</p>
+
 # Virtual ASCII
 
 A Rust application that converts a real webcam feed into ASCII art and outputs it as a virtual webcam via v4l2loopback. Available as both a CLI and a native GUI. The result is a recognizable but stylized video stream that works in any video calling app (Zoom, Google Meet, Discord, OBS, etc.).
@@ -73,11 +77,11 @@ cargo run --release --features gui -- gui
 
 The GUI provides a native desktop window with:
 
-- **Dual live preview** — raw camera feed and ASCII output side by side
-- **Settings panel** — camera selection, resolution, FPS, theme, definition, colors, brightness curve, and invert toggle
-- **Real-time adjustments** — all settings update the live preview immediately (150ms debounce)
-- **v4l2loopback management** — load/unload the kernel module and start/stop the virtual camera, all from the GUI
-- **Camera conflict detection** — warns if another process (browser, OBS, etc.) is holding the camera
+- **Dual live preview.** Raw camera feed and ASCII output side by side.
+- **Settings panel.** Camera selection, resolution, FPS, theme, definition, colors, brightness curve, and invert toggle.
+- **Real-time adjustments.** All settings update the live preview immediately (150ms debounce).
+- **v4l2loopback management.** Load/unload the kernel module and start/stop the virtual camera, all from the GUI.
+- **Camera conflict detection.** Warns if another process (browser, OBS, etc.) is holding the camera.
 
 The GUI uses the same pipeline as the CLI, so the same themes, definition levels, and brightness curves apply.
 
@@ -163,7 +167,7 @@ virtual-ascii -t mono -d 5 --invert
 
 ### Live Settings
 
-While virtual-ascii is running, you can change any setting without restarting. This keeps your virtual webcam stream uninterrupted — video calling apps (Zoom, OBS, etc.) won't lose the source.
+While virtual-ascii is running, you can change any setting without restarting. This keeps your virtual webcam stream uninterrupted, so video calling apps (Zoom, OBS, etc.) won't lose the source.
 
 ```bash
 # Check what's currently running
@@ -188,7 +192,7 @@ virtual-ascii set --fg-color ff69b4 --bg-color 0a0020
 virtual-ascii set --invert true
 ```
 
-The `set` command accepts the same flags as the main command. Multiple settings in one command are batched — e.g. `-i 2 -r 1920x1080` reopens the camera only once, not twice.
+The `set` command accepts the same flags as the main command. Multiple settings in one command are batched, so `-i 2 -r 1920x1080` reopens the camera only once, not twice.
 
 Communication uses a Linux abstract namespace socket, so there are no stale socket files to clean up, even after `kill -9`.
 
@@ -217,7 +221,7 @@ Formats:    MJPG, H.264
 
 ### Recommended Settings
 
-The camera defaults to 1920x1440 (4:3) with `AbsoluteHighestFrameRate`, which may produce a taller-than-expected output. This works fine — the ASCII grid adapts to whatever the camera provides.
+The camera defaults to 1920x1440 (4:3) with `AbsoluteHighestFrameRate`, which may produce a taller-than-expected output. This works fine. The ASCII grid adapts to whatever the camera provides.
 
 ```bash
 # Standard use (camera auto-detected)
@@ -234,8 +238,8 @@ virtual-ascii -r 1920x1080
 # For lighter CPU usage, use 720p
 virtual-ascii -r 1280x720
 
-# The default 4:3 aspect ratio (1920x1440) works well with ASCII art —
-# the taller frame gives more vertical character rows for better detail
+# The default 4:3 aspect ratio (1920x1440) works well with ASCII art.
+# The taller frame gives more vertical character rows for better detail.
 
 # Change resolution on a running instance
 virtual-ascii set -r 1280x720
@@ -292,7 +296,7 @@ GUI mode:
 - **Control** (CLI) listens on a Unix abstract socket for `set`/`status` commands, routes changes to the appropriate thread
 - **GUI** sends `CaptureCommand`/`RenderCommand` directly over crossbeam channels, with preview frames flowing back to the UI thread for display
 
-Frames are dropped (not queued) when the render thread falls behind, keeping latency low. All font glyphs are pre-rasterized at startup — per-frame rendering is bitmap copies only. Command processing uses `try_recv()` at the top of each frame loop (~40-100ns when empty), so there's no overhead on the hot path.
+Frames are dropped (not queued) when the render thread falls behind, keeping latency low. All font glyphs are pre-rasterized at startup, so per-frame rendering is bitmap copies only. Command processing uses `try_recv()` at the top of each frame loop (~40-100ns when empty), so there's no overhead on the hot path.
 
 ## Built With
 

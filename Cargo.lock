@@ -2910,6 +2910,7 @@ dependencies = [
  "eframe",
  "egui",
  "fontdue",
+ "image",
  "libc",
  "nix 0.29.0",
  "nokhwa",

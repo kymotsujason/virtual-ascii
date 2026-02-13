@@ -607,7 +607,7 @@ fn apply_bloom(
         return;
     }
 
-    // Step 1: Downsample — average each 4×4 pixel block
+    // Step 1: Downsample. Average each 4×4 pixel block.
     let block = BLOOM_DS_FACTOR;
     let count = (block * block) as u32;
 
@@ -644,7 +644,7 @@ fn apply_bloom(
         }
     }
 
-    // Step 2: Multi-pass blur (two passes ≈ tent/Gaussian falloff)
+    // Step 2: Multi-pass blur (two passes ~= tent/Gaussian falloff)
     for _ in 0..BLOOM_BLUR_PASSES {
         box_blur_h(bloom_buf, bloom_tmp, ds_w, ds_h, BLOOM_BLUR_RADIUS);
         box_blur_v(bloom_tmp, bloom_buf, ds_w, ds_h, BLOOM_BLUR_RADIUS);
