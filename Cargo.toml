@@ -1,0 +1,28 @@
+[package]
+name = "virtual-ascii"
+version = "0.1.0"
+edition = "2021"
+
+
+[features]
+default = []
+gui = ["eframe", "egui"]
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+nokhwa = { version = "0.10", features = ["input-native"] }
+fontdue = "0.9"
+crossbeam-channel = "0.5"
+nix = { version = "0.29", features = ["ioctl", "user"] }
+libc = "0.2"
+anyhow = "1.0"
+ctrlc = "3.4"
+eframe = { version = "0.33", optional = true, default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+egui = { version = "0.33", optional = true }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

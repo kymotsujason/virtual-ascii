@@ -1,0 +1,25 @@
+# Created by https://www.toptal.com/developers/gitignore/api/rust,linux
+# with project-specific additions
+
+### Rust ###
+/target
+debug/
+**/*.rs.bk
+*.pdb
+
+### Linux ###
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+### Project ###
+.worktrees/
+
+### AI tool configs (user-specific) ###
+.claude/
+.grok/
+
+### Python venv ###
+.venv/
